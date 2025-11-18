@@ -1,96 +1,63 @@
-
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <chrono>      // 실행 시간 측정용
-#include "file_io.h"
+#include <chrono>
 
+#include "../code/file_io.h"
+#include "../code/join_engine.cpp"
 
 using namespace std;
 
-// 출력 포맷: C_CUSTKEY | C_NAME | O_ORDERKEY | O_ORDERDATE | O_TOTALPRICE
-static void writeJoinResult(ofstream& fout,
-                            const Customer& c,
-                            const Order& o)
-{
-    fout << c.custkey << "|"
-         << c.name << "|"
-         << o.orderkey << "|"
-         << o.orderdate << "|"
-         << o.totalprice << "\n";
-}
+int main(int argc, char* argv[]) {
 
-int main(int argc, char* argv[])
-{
-    // 1) 버퍼 크기 설정 ---------------------------------------
-    int bufferSize = DEFAULT_BUFFER_SIZE;   // 기본값 100 (file_io.cpp에 정의)
+    int bufferSize = DEFAULT_BUFFER_SIZE;
+    if (argc >= 2) bufferSize = stoi(argv[1]);
 
-    if (argc >= 2) {
-        bufferSize = stoi(argv[1]);         // ./run_join 500 이런 식으로 변경
-    }
+    cout << "[INFO] bufferSize = " << bufferSize << " 레코드" << endl;
 
-    cout << "[INFO] Buffer size = " << bufferSize << " records\n";
+    ifstream custFile("data/customer.tbl");
+    ifstream orderFile("data/orders.tbl");
+    ofstream out("result/result_cust_orders.tbl");
 
-    // 2) 입력 / 출력 파일 열기 ---------------------------------
-    ifstream c_fin("data/customer.tbl");
-    ifstream o_fin("data/orders.tbl");
-    ofstream out("data/join_customer_orders.tbl");  // 결과 파일
-
-    if (!c_fin.is_open()) {
-        cerr << "❌ customer.tbl 파일을 열 수 없습니다!\n";
-        return 1;
-    }
-    if (!o_fin.is_open()) {
-        cerr << "❌ orders.tbl 파일을 열 수 없습니다!\n";
-        return 1;
-    }
-    if (!out.is_open()) {
-        cerr << "❌ 결과 파일을 만들 수 없습니다!\n";
+    if (!custFile.is_open() || !orderFile.is_open() || !out.is_open()) {
+        cerr << "[ERROR] 파일을 열 수 없습니다!" << endl;
         return 1;
     }
 
-    // 3) 블록 버퍼 선언 ---------------------------------------
-    vector<Customer> c_block;
-    vector<Order>    o_block;
+    auto start = chrono::high_resolution_clock::now();
 
-    long long joinCount = 0;   // 조인된 튜플 개수 카운트
+    vector<Customer> custBlock;
+    vector<Order> orderBlock;
 
-    auto startTime = chrono::high_resolution_clock::now();
+    int custBlockIdx = 0;
 
-    // 4) 외부 루프: CUSTOMER를 블록 단위로 읽기 ---------------
-    int outerBlockIdx = 0;
+    // CUSTOMER 블록 반복
+    while (true) {
+        bool custOk = readCustomerBlock(custFile, custBlock, bufferSize);
+        if (!custOk) break;
 
-    while (readCustomerBlock(c_fin, c_block, bufferSize)) {
-        ++outerBlockIdx;
-        cout << "[INFO] CUSTOMER 블록 " << outerBlockIdx
-             << " (size=" << c_block.size() << ") 처리 중...\n";
+        cout << "[INFO] CUSTOMER 블록 " << custBlockIdx++
+             << " (size=" << custBlock.size() << ") 처리 중..." << endl;
 
-        // 🔁 내부 루프를 위해 ORDERS 파일 처음으로 되돌리기
-        o_fin.clear();        // EOF/에러 플래그 초기화
-        o_fin.seekg(0);       // 파일 포인터 맨 앞으로
+        // ORDERS 파일은 매 CUSTOMER 블록마다 처음부터 읽기
+        orderFile.clear();
+        orderFile.seekg(0, ios::beg);
 
-        // 5) 내부 루프: ORDERS를 블록 단위로 읽기 --------------
-        while (readOrderBlock(o_fin, o_block, bufferSize)) {
+        // ORDER 반복
+        while (true) {
+            bool orderOk = readOrderBlock(orderFile, orderBlock, bufferSize);
+            if (!orderOk) break;
 
-            // 6) Block Nested Loops Join 핵심 부분 -------------
-            for (const auto& c : c_block) {
-                for (const auto& o : o_block) {
-                    if (c.custkey == o.custkey) {   // 조인 조건
-                        writeJoinResult(out, c, o);
-                        ++joinCount;
-                    }
-                }
-            }
+            // 블록 vs 블록 조인
+            joinCustomerOrdersBlock(custBlock, orderBlock, out);
         }
     }
 
-    auto endTime = chrono::high_resolution_clock::now();
-    chrono::duration<double> elapsed = endTime - startTime;
+    auto end = chrono::high_resolution_clock::now();
+    auto ms = chrono::duration_cast<chrono::milliseconds>(end - start).count();
 
-    cout << "\n=== Join 완료 ===\n";
-    cout << "조인 결과 튜플 수   : " << joinCount << "\n";
-    cout << "총 실행 시간 (초)   : " << elapsed.count() << " s\n";
-    cout << "결과 파일           : data/join_customer_orders.tbl\n";
+    cout << "[RESULT] bufferSize=" << bufferSize 
+         << " 실행 시간: " << ms << " ms" << endl;
 
     return 0;
 }

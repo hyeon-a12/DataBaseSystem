@@ -1,0 +1,1 @@
+[INFO] bufferSize = 100 레코드
