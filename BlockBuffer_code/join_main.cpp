@@ -53,11 +53,21 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    auto end = chrono::high_resolution_clock::now();
-    auto ms = chrono::duration_cast<chrono::milliseconds>(end - start).count();
+auto end = chrono::high_resolution_clock::now();
+auto ms = chrono::duration_cast<chrono::milliseconds>(end - start).count();
 
-    cout << "[RESULT] bufferSize=" << bufferSize 
-         << " 실행 시간: " << ms << " ms" << endl;
+// 대략적인 메모리 Footprint 계산
+size_t custRecordSize  = sizeof(Customer);
+size_t orderRecordSize = sizeof(Order);
 
-    return 0;
+// CUSTOMER 블록 1개 + ORDER 블록 1개를 메모리에 올린다고 가정
+size_t memBytes = (custRecordSize + orderRecordSize) * bufferSize;
+
+cout << "[RESULT] bufferSize=" << bufferSize 
+     << " 실행 시간: " << ms << " ms"
+     << " , 메모리 Footprint ≈ " << memBytes / (1024.0 * 1024.0) << " MB"
+     << endl;
+
+return 0;
 }
+
