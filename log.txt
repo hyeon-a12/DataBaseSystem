@@ -1,1 +1,5 @@
-[INFO] bufferSize = 100 레코드
+
+[INFO] bufferSize = 500 레코드
+[INFO] CUSTOMER 블록 0 (size=500) 처리 중...
+[INFO] bufferSize = 5000 레코드
+[INFO] CUSTOMER 블록 0 (size=5000) 처리 중...

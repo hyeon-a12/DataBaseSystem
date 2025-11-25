@@ -26,8 +26,15 @@ int main(int argc, char* argv[]) {
 
     auto start = chrono::high_resolution_clock::now();
 
+    //기존
+    // vector<Customer> custBlock;
+    // vector<Order> orderBlock;
+
     vector<Customer> custBlock;
-    vector<Order> orderBlock;
+    vector<Order>   orderBlock;
+
+    custBlock.reserve(bufferSize);
+    orderBlock.reserve(bufferSize);
 
     int custBlockIdx = 0;
 
