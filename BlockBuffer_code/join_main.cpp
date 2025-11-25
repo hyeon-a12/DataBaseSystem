@@ -5,7 +5,6 @@
 #include <chrono>      // 실행 시간 측정용
 #include "file_io.h"
 
-
 using namespace std;
 
 // 출력 포맷: C_CUSTKEY | C_NAME | O_ORDERKEY | O_ORDERDATE | O_TOTALPRICE

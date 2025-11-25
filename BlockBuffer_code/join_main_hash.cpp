@@ -5,36 +5,42 @@
 #include <unordered_map>
 #include <chrono>
 
-#include "file_io.h"   // 기존에 만든 Customer, Order, readXXXBlock 선언
+#include "file_io.h"   // Customer, Order, readCustomerBlock(), readOrderBlock()
 
 using namespace std;
 
-// 출력 포맷: C_CUSTKEY | C_NAME | O_ORDERKEY | O_ORDERDATE | O_TOTALPRICE
-static void writeJoinResult(ofstream& fout,
-                            const Customer& c,
-                            const Order& o)
+// 결과 한 줄 출력: C_CUSTKEY | C_NAME | O_ORDERKEY | O_ORDERDATE | O_TOTALPRICE
+static inline void writeJoinResult(ofstream& fout,
+                                   const Customer& c,
+                                   const Order&    o)
 {
-    fout << c.custkey   << "|"
-         << c.name      << "|"
-         << o.orderkey  << "|"
-         << o.orderdate << "|"
-         << o.totalprice << "\n";
+    // 문자열 연결 대신, 연속된 << 연산으로 바로 출력
+    fout << c.custkey   << '|'
+         << c.name      << '|'
+         << o.orderkey  << '|'
+         << o.orderdate << '|'
+         << o.totalprice << '\n';
 }
 
 int main(int argc, char* argv[])
 {
-    // 1) 버퍼 크기 설정 (블록 IO 재사용용 – 해시 조인 자체는 O(N+M))
-    int bufferSize = DEFAULT_BUFFER_SIZE;   // file_io.h 에 정의해 둔 값 (예: 100)
+    // C / C++ stdio 동기화 끄기 (입출력 약간 빨라짐)
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    // 1) 버퍼 크기 설정 --------------------------------------
+    int bufferSize = DEFAULT_BUFFER_SIZE;   // file_io.h 에서 정의한 기본값 (예: 100)
     if (argc >= 2) {
-        bufferSize = stoi(argv[1]);         // ./run_join_hash 1000 이런 식으로 조절 가능
+        bufferSize = stoi(argv[1]);         // 예: ./run_join_hash 500
     }
 
     cout << "[INFO] Buffer size = " << bufferSize << " records\n";
 
-    // 2) 입력 / 출력 파일 열기 -----------------------------------------
-    ifstream c_fin("data/customer.tbl");
-    ifstream o_fin("data/orders.tbl");
-    ofstream out("data/join_customer_orders_hash.tbl");  // 결과 파일
+    // 2) 입력 / 출력 파일 열기 --------------------------------
+    ifstream c_fin("data/customer.tbl", ios::in | ios::binary);
+    ifstream o_fin("data/orders.tbl",   ios::in | ios::binary);
+    ofstream out("data/join_customer_orders_hash.tbl",
+                 ios::out | ios::binary);
 
     if (!c_fin.is_open()) {
         cerr << "❌ customer.tbl 파일을 열 수 없습니다!\n";
@@ -49,49 +55,56 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    // 출력 스트림에 조금 더 큰 버퍼 부여 (디스크 I/O 줄이기 위해)
+    static char outBuf[1 << 20]; // 1MB
+    out.rdbuf()->pubsetbuf(outBuf, sizeof(outBuf));
+
     auto startTime = chrono::high_resolution_clock::now();
 
-    // 3) ORDERS를 해시 테이블에 한 번만 적재 ---------------------------
+    // 3) ORDERS 를 해시 테이블에 한 번만 적재 -----------------
     //    key = O_CUSTKEY, value = 그 고객의 모든 주문 벡터
     unordered_map<int, vector<Order>> ordersByCust;
-    ordersByCust.reserve(200000); // 대략적인 버킷 수(적당히 넉넉하게)
+    ordersByCust.reserve(1'600'000); // 대략 orders 개수보다 약간 크게
 
-    vector<Order> o_block;
+    vector<Order>    o_block;
+    vector<Customer> c_block;
+    o_block.reserve(bufferSize);
+    c_block.reserve(bufferSize);
+
     long long orderCount = 0;
+    long long custCount  = 0;
+    long long joinCount  = 0;
 
+    // 3-1) ORDERS 전체를 블록 단위로 읽어 해시 테이블에 저장
     while (readOrderBlock(o_fin, o_block, bufferSize)) {
+        // readOrderBlock 안에서 o_block.clear() 를 해주고 있다고 가정
         for (const auto& o : o_block) {
             ordersByCust[o.custkey].push_back(o);
             ++orderCount;
         }
     }
 
-    cout << "[INFO] ORDERS " << orderCount
-         << "건을 해시 테이블에 적재 완료 (bucket_count="
-         << ordersByCust.bucket_count() << ")\n";
 
-    // 4) CUSTOMER를 읽으면서 해시 테이블 조회 -------------------------
+    // 4) CUSTOMER 를 읽으면서 해시 테이블 조회 ----------------
     c_fin.clear();
-    c_fin.seekg(0);       // 혹시 몰라서 파일 포인터 처음으로
+    c_fin.seekg(0);   // 혹시 모를 EOF 플래그 제거 후 처음으로 이동
 
-    vector<Customer> c_block;
-    long long joinCount = 0;
-    long long custCount = 0;
-    int blockIdx = 0;
+    int cBlockIdx = 0;
 
     while (readCustomerBlock(c_fin, c_block, bufferSize)) {
-        ++blockIdx;
-        cout << "[INFO] CUSTOMER 블록 " << blockIdx
-             << " (size=" << c_block.size() << ") 처리 중...\n";
+        ++cBlockIdx;
+        // 디버깅용 로그는 필요하면만 찍기 (속도에 영향 커서 주석 처리해도 됨)
+        // cout << "[INFO] CUSTOMER 블록 " << cBlockIdx
+        //      << " (size=" << c_block.size() << ") 처리 중...\n";
 
         for (const auto& c : c_block) {
             ++custCount;
 
             auto it = ordersByCust.find(c.custkey);
-            if (it == ordersByCust.end()) continue;   // 주문 없는 고객
+            if (it == ordersByCust.end()) continue;   // 주문이 없는 고객
 
-            // 해당 고객의 모든 주문과 조인
             const auto& ordersForCust = it->second;
+            // 해당 고객의 모든 주문과 조인
             for (const auto& o : ordersForCust) {
                 writeJoinResult(out, c, o);
                 ++joinCount;
@@ -103,9 +116,9 @@ int main(int argc, char* argv[])
     chrono::duration<double> elapsed = endTime - startTime;
 
     cout << "\n=== Hash Join 완료 ===\n";
-    cout << "CUSTOMER 개수      : " << custCount << "\n";
+    cout << "CUSTOMER 개수      : " << custCount  << "\n";
     cout << "ORDERS 개수        : " << orderCount << "\n";
-    cout << "조인 결과 튜플 수  : " << joinCount << "\n";
+    cout << "조인 결과 튜플 수  : " << joinCount  << "\n";
     cout << "총 실행 시간 (초)  : " << elapsed.count() << " s\n";
     cout << "결과 파일          : data/join_customer_orders_hash.tbl\n";
 
@@ -113,10 +126,9 @@ int main(int argc, char* argv[])
 }
 
 #ifdef _WIN32
-// windows.h 없이 WinMain만 직접 선언
-int __stdcall WinMain(void* hInst, void* hPrev, char* cmdLine, int showCmd)
+// MinGW 에서 발생하는 WinMain 링크 에러 방지용 래퍼
+int __stdcall WinMain(void*, void*, char*, int)
 {
-    // MinGW에서 제공하는 전역 변수 __argc, __argv 사용
     return main(__argc, __argv);
 }
 #endif
